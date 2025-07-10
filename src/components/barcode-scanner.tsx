@@ -5,25 +5,18 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Camera, CheckCircle2, XCircle, Loader2, AlertCircle, ScanLine } from 'lucide-react';
+import { barcodeRecognition } from '@/ai/flows/barcode-recognition';
+import { useToast } from '@/hooks/use-toast';
 
 interface BarcodeState {
   status: 'pending' | 'approved' | 'rejected';
+  serialNumber?: string;
 }
 
 interface DetectedBarcode extends BarcodeState {
   rawValue: string;
   boundingBox: DOMRectReadOnly;
 }
-
-const mockValidateBarcode = (rawValue: string): Promise<'approved' | 'rejected'> => {
-  return new Promise(resolve => {
-    setTimeout(() => {
-      if (rawValue.toLowerCase().includes('valid')) resolve('approved');
-      else if (rawValue.toLowerCase().includes('invalid')) resolve('rejected');
-      else resolve(Math.random() > 0.4 ? 'approved' : 'rejected');
-    }, 1500);
-  });
-};
 
 export default function BarcodeScanner() {
   const [isScannerReady, setIsScannerReady] = useState(false);
@@ -33,6 +26,7 @@ export default function BarcodeScanner() {
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const animationFrameId = useRef<number>();
+  const { toast } = useToast();
   
   const isBarcodeDetectorSupported = typeof window !== 'undefined' && 'BarcodeDetector' in window;
 
@@ -53,6 +47,11 @@ export default function BarcodeScanner() {
       } catch (error) {
         console.error('Error accessing camera:', error);
         setIsScannerReady(false);
+        toast({
+          variant: 'destructive',
+          title: 'Camera Access Error',
+          description: 'Could not access the camera. Please check permissions.',
+        });
       }
     }
   };
@@ -69,6 +68,38 @@ export default function BarcodeScanner() {
     }
   }, []);
 
+  const validateBarcodeWithAI = useCallback(async (barcodeValue: string) => {
+    if (!videoRef.current) return;
+
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth;
+      canvas.height = videoRef.current.videoHeight;
+      const context = canvas.getContext('2d');
+      if (!context) return;
+
+      context.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      const photoDataUri = canvas.toDataURL('image/jpeg');
+
+      const result = await barcodeRecognition({ photoDataUri });
+
+      if (result && result.serialNumber) {
+        setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'approved', serialNumber: result.serialNumber }));
+      } else {
+        setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'rejected' }));
+      }
+    } catch (error) {
+      console.error('AI validation error:', error);
+      setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'rejected' }));
+      toast({
+          variant: 'destructive',
+          title: 'Validation Failed',
+          description: 'Could not validate the barcode with AI.',
+        });
+    }
+  }, [toast]);
+
+
   const scanFrame = useCallback(async () => {
     if (!videoRef.current || videoRef.current.paused || videoRef.current.ended || !isScanning) {
         return;
@@ -84,15 +115,13 @@ export default function BarcodeScanner() {
         if (!barcodeState) {
           barcodeState = { status: 'pending' };
           setPersistentCodes(prev => new Map(prev).set(barcode.rawValue, barcodeState!));
-
-          mockValidateBarcode(barcode.rawValue).then(newStatus => {
-            setPersistentCodes(prev => new Map(prev).set(barcode.rawValue, { status: newStatus }));
-          });
+          validateBarcodeWithAI(barcode.rawValue);
         }
         
         newVisibleBarcodes.push({
           ...barcode,
           status: barcodeState.status,
+          serialNumber: barcodeState.serialNumber,
         });
       }
       setVisibleBarcodes(newVisibleBarcodes);
@@ -103,7 +132,7 @@ export default function BarcodeScanner() {
         animationFrameId.current = requestAnimationFrame(scanFrame);
       }
     }
-  }, [getBarcodeDetector, isScanning, persistentCodes]);
+  }, [getBarcodeDetector, isScanning, persistentCodes, validateBarcodeWithAI]);
 
   useEffect(() => {
     if(isBarcodeDetectorSupported) {
@@ -160,7 +189,7 @@ export default function BarcodeScanner() {
     <Card className="w-full max-w-4xl shadow-2xl overflow-hidden border-2 border-primary/20">
       <CardContent className="p-0">
         <div className="relative aspect-[4/3] sm:aspect-video bg-black flex items-center justify-center">
-          <video ref={videoRef} className={`w-full h-full object-cover transition-opacity duration-300 ${isScanning ? 'opacity-100' : 'opacity-0'}`} playsInline />
+          <video ref={videoRef} className={`w-full h-full object-cover transition-opacity duration-300 ${isScanning ? 'opacity-100' : 'opacity-0'}`} playsInline muted />
           
           {!isScanning && (
             <div className="absolute inset-0 flex flex-col items-center justify-center z-10 p-4 bg-background/95 backdrop-blur-sm">
@@ -200,7 +229,7 @@ export default function BarcodeScanner() {
                       className={`border-[6px] rounded-lg transition-colors duration-500 ease-in-out ${config.color}`}
                     >
                       <div className="absolute -top-10 left-1/2 -translate-x-1/2 bg-black/50 text-white px-2 py-1 rounded text-xs truncate max-w-[calc(100%-1rem)]">
-                        {barcode.rawValue}
+                        {barcode.status === 'approved' ? barcode.serialNumber : barcode.rawValue}
                       </div>
                       <div className="w-8 h-8 absolute -bottom-10 left-1/2 -translate-x-1/2 p-1 bg-black/50 rounded-full">
                         {config.icon}
