@@ -17,6 +17,8 @@ interface DetectedBarcode extends BarcodeState {
   boundingBox: DOMRectReadOnly;
 }
 
+const APPROVED_SERIAL_NUMBER = "T2132000111632";
+
 export default function BarcodeScanner() {
   const [isScannerReady, setIsScannerReady] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
@@ -67,25 +69,13 @@ export default function BarcodeScanner() {
     }
   }, []);
 
-  const validateBarcode = useCallback(async (barcodeValue: string) => {
-    try {
-      // Make API call to validate the barcode
-      const response = await fetch(`https://n8n.tunahanozcan.dev/webhook/approvedSerial?barcode=${barcodeValue}`);
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      const isApproved = await response.json(); // Assuming the API returns a boolean
-
-      if (isApproved) {
-        setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'approved', serialNumber: barcodeValue }));
-      } else {
-        setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'rejected' }));
-      }
-    } catch (error) {
-      console.error('Error validating barcode:', error);
-      // Handle error case - maybe set status to 'pending' or show a toast
+  const validateBarcode = useCallback((barcodeValue: string) => {
+    if (barcodeValue === APPROVED_SERIAL_NUMBER) {
+      setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'approved', serialNumber: barcodeValue }));
+    } else {
+      setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'rejected' }));
     }
-  }, [setPersistentCodes]);
+  }, []);
 
 
   const scanFrame = useCallback(async () => {
@@ -103,7 +93,10 @@ export default function BarcodeScanner() {
         if (!barcodeState) {
           barcodeState = { status: 'pending' };
           setPersistentCodes(prev => new Map(prev).set(barcode.rawValue, barcodeState!));
+          // Validate immediately, no pending state needed for local check
           validateBarcode(barcode.rawValue);
+          // Get the updated state
+          barcodeState = persistentCodes.get(barcode.rawValue) || { status: 'pending' };
         }
         
         newVisibleBarcodes.push({
