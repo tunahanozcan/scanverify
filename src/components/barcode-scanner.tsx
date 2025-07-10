@@ -5,7 +5,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Camera, CheckCircle2, XCircle, Loader2, AlertCircle, ScanLine } from 'lucide-react';
-import { barcodeRecognition } from '@/ai/flows/barcode-recognition';
 import { useToast } from '@/hooks/use-toast';
 
 interface BarcodeState {
@@ -17,6 +16,8 @@ interface DetectedBarcode extends BarcodeState {
   rawValue: string;
   boundingBox: DOMRectReadOnly;
 }
+
+const APPROVED_SERIAL_NUMBER = "T2132000111632";
 
 export default function BarcodeScanner() {
   const [isScannerReady, setIsScannerReady] = useState(false);
@@ -68,36 +69,13 @@ export default function BarcodeScanner() {
     }
   }, []);
 
-  const validateBarcodeWithAI = useCallback(async (barcodeValue: string) => {
-    if (!videoRef.current) return;
-
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
-      const context = canvas.getContext('2d');
-      if (!context) return;
-
-      context.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      const photoDataUri = canvas.toDataURL('image/jpeg');
-
-      const result = await barcodeRecognition({ photoDataUri });
-
-      if (result && result.serialNumber) {
-        setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'approved', serialNumber: result.serialNumber }));
-      } else {
-        setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'rejected' }));
-      }
-    } catch (error) {
-      console.error('AI validation error:', error);
+  const validateBarcode = useCallback((barcodeValue: string) => {
+    if (barcodeValue === APPROVED_SERIAL_NUMBER) {
+      setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'approved', serialNumber: barcodeValue }));
+    } else {
       setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'rejected' }));
-      toast({
-          variant: 'destructive',
-          title: 'Validation Failed',
-          description: 'Could not validate the barcode with AI.',
-        });
     }
-  }, [toast]);
+  }, []);
 
 
   const scanFrame = useCallback(async () => {
@@ -115,7 +93,7 @@ export default function BarcodeScanner() {
         if (!barcodeState) {
           barcodeState = { status: 'pending' };
           setPersistentCodes(prev => new Map(prev).set(barcode.rawValue, barcodeState!));
-          validateBarcodeWithAI(barcode.rawValue);
+          validateBarcode(barcode.rawValue);
         }
         
         newVisibleBarcodes.push({
@@ -132,7 +110,7 @@ export default function BarcodeScanner() {
         animationFrameId.current = requestAnimationFrame(scanFrame);
       }
     }
-  }, [getBarcodeDetector, isScanning, persistentCodes, validateBarcodeWithAI]);
+  }, [getBarcodeDetector, isScanning, persistentCodes, validateBarcode]);
 
   useEffect(() => {
     if(isBarcodeDetectorSupported) {
