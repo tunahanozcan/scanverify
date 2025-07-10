@@ -17,8 +17,6 @@ interface DetectedBarcode extends BarcodeState {
   boundingBox: DOMRectReadOnly;
 }
 
-const APPROVED_SERIAL_NUMBER = "T2132000111632";
-
 export default function BarcodeScanner() {
   const [isScannerReady, setIsScannerReady] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
@@ -69,13 +67,48 @@ export default function BarcodeScanner() {
     }
   }, []);
 
-  const validateBarcode = useCallback((barcodeValue: string) => {
-    if (barcodeValue === APPROVED_SERIAL_NUMBER) {
-      setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'approved', serialNumber: barcodeValue }));
-    } else {
+  const validateBarcode = useCallback(async (barcodeValue: string) => {
+    // Prevent re-validating a code that already has a definitive status
+    const existingState = persistentCodes.get(barcodeValue);
+    if (existingState && (existingState.status === 'approved' || existingState.status === 'rejected')) {
+        return;
+    }
+
+    // Set as pending while we validate
+    setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'pending' }));
+
+    try {
+      const response = await fetch(`https://n8n.tunahanozcan.dev/webhook/approvedSerial`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ barcode: barcodeValue }),
+      });
+
+      if (!response.ok) {
+        // If API returns an error, treat as rejected
+        setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'rejected' }));
+        return;
+      }
+      
+      const result = await response.json();
+
+      if (result.approved) {
+        setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'approved', serialNumber: barcodeValue }));
+      } else {
+        setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'rejected' }));
+      }
+    } catch (error) {
+      console.error('Validation request failed:', error);
+      toast({
+        variant: "destructive",
+        title: "Validation Failed",
+        description: "Could not connect to the validation server.",
+      });
       setPersistentCodes(prev => new Map(prev).set(barcodeValue, { status: 'rejected' }));
     }
-  }, []);
+  }, [persistentCodes, toast]);
 
 
   const scanFrame = useCallback(async () => {
@@ -85,24 +118,24 @@ export default function BarcodeScanner() {
     try {
       const barcodeDetector = getBarcodeDetector();
       const detectedInFrame = await barcodeDetector.detect(videoRef.current);
+      
+      const currentlyVisibleRawValues = new Set();
       const newVisibleBarcodes: DetectedBarcode[] = [];
 
       for (const barcode of detectedInFrame) {
+        currentlyVisibleRawValues.add(barcode.rawValue);
         let barcodeState = persistentCodes.get(barcode.rawValue);
 
         if (!barcodeState) {
           barcodeState = { status: 'pending' };
-          setPersistentCodes(prev => new Map(prev).set(barcode.rawValue, barcodeState!));
-          // Validate immediately, no pending state needed for local check
+          // Don't set pending here, let validateBarcode handle it to avoid race conditions
           validateBarcode(barcode.rawValue);
-          // Get the updated state
-          barcodeState = persistentCodes.get(barcode.rawValue) || { status: 'pending' };
         }
         
         newVisibleBarcodes.push({
           ...barcode,
-          status: barcodeState.status,
-          serialNumber: barcodeState.serialNumber,
+          status: barcodeState?.status || 'pending',
+          serialNumber: barcodeState?.serialNumber,
         });
       }
       setVisibleBarcodes(newVisibleBarcodes);
